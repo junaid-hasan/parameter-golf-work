@@ -781,7 +781,7 @@ def build_block_group_map(num_layers: int, share_mode: str) -> list[int]:
 
 
 def quantize_state_dict_int8(
-    flat_state: dict[str, mx.array],
+    flat_state: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, int]]:
     quantized: dict[str, np.ndarray] = {}
     scales: dict[str, np.ndarray] = {}
@@ -801,10 +801,23 @@ def quantize_state_dict_int8(
         0,
     )
     for name, arr in flat_state.items():
-        stats["param_count"] += int(arr.size)
+        arr_size = getattr(arr, "size", None)
+        arr_nbytes = getattr(arr, "nbytes", None)
+        arr_dtype = getattr(arr, "dtype", None)
+        if arr_size is None or arr_nbytes is None or arr_dtype is None:
+            passthrough[name] = arr
+            arr_np = np.asarray(arr)
+            stats["param_count"] += int(arr_np.size)
+            stats["num_tensors"] += 1
+            stats["num_nonfloat_tensors"] += 1
+            stats["baseline_tensor_bytes"] += int(arr_np.nbytes)
+            stats["int8_payload_bytes"] += int(arr_np.nbytes)
+            continue
+
+        stats["param_count"] += int(arr_size)
         stats["num_tensors"] += 1
-        stats["baseline_tensor_bytes"] += int(arr.nbytes)
-        if not mx.issubdtype(arr.dtype, mx.floating):
+        stats["baseline_tensor_bytes"] += int(arr_nbytes)
+        if not mx.issubdtype(arr_dtype, mx.floating):
             stats["num_nonfloat_tensors"] += 1
             passthrough[name] = np.ascontiguousarray(np.array(arr))
             stats["int8_payload_bytes"] += int(passthrough[name].nbytes)
@@ -858,12 +871,15 @@ def dequantize_state_dict_int8(quant_obj: dict[str, object]) -> dict[str, mx.arr
         out[name] = mx.array(out_arr, dtype=MX_DTYPE_FROM_NAME[dtype_name])
     for name, arr in quant_obj["passthrough"].items():
         # Restore small tensors, undoing the temporary fp16 storage cast if needed.
-        out_arr = np.array(arr, copy=True)
-        orig_dtype = passthrough_orig_dtypes.get(name)
-        if isinstance(orig_dtype, str):
-            out[name] = mx.array(out_arr, dtype=MX_DTYPE_FROM_NAME[orig_dtype])
+        if isinstance(arr, np.ndarray):
+            out_arr = np.array(arr, copy=True)
+            orig_dtype = passthrough_orig_dtypes.get(name)
+            if isinstance(orig_dtype, str):
+                out[name] = mx.array(out_arr, dtype=MX_DTYPE_FROM_NAME[orig_dtype])
+            else:
+                out[name] = mx.array(out_arr)
         else:
-            out[name] = mx.array(out_arr)
+            out[name] = arr
     return out
 
 
