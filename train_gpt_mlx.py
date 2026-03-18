@@ -1337,7 +1337,22 @@ def main() -> None:
     # model and running one final validation pass.
     out_path = out_dir / f"{args.run_id}_mlx_model.npz"
     flat_state = {k: v for k, v in tree_flatten(model.state)}
-    mx.savez(str(out_path), **flat_state)
+    save_state = {
+        k: (v.astype(mx.float32) if getattr(v, "dtype", None) == mx.bfloat16 else v)
+        for k, v in flat_state.items()
+    }
+
+    def _to_numpy_for_save(v: object) -> np.ndarray:
+        if getattr(v, "dtype", None) == mx.bfloat16:
+            return np.asarray(v.astype(mx.float32))
+        return np.asarray(v)
+
+    try:
+        mx.savez(str(out_path), **save_state)
+    except Exception as exc:
+        np_save_state = {k: _to_numpy_for_save(v) for k, v in save_state.items()}
+        np.savez(str(out_path), **np_save_state)
+        log(f"warning: mx.savez failed ({exc!r}); fell back to np.savez")
     log(f"saved_model:{out_path} bytes:{out_path.stat().st_size}")
 
     quant_obj, quant_stats = quantize_state_dict_int8(flat_state)
