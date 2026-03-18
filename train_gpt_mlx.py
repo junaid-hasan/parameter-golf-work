@@ -1337,13 +1337,18 @@ def main() -> None:
     # model and running one final validation pass.
     out_path = out_dir / f"{args.run_id}_mlx_model.npz"
     flat_state = {k: v for k, v in tree_flatten(model.state)}
+
+    def _is_bfloat16(v: object) -> bool:
+        dtype = getattr(v, "dtype", None)
+        return dtype is not None and str(dtype) == str(mx.bfloat16)
+
     save_state = {
-        k: (v.astype(mx.float32) if getattr(v, "dtype", None) == mx.bfloat16 else v)
+        k: (v.astype(mx.float32) if _is_bfloat16(v) else v)
         for k, v in flat_state.items()
     }
 
     def _to_numpy_for_save(v: object) -> np.ndarray:
-        if getattr(v, "dtype", None) == mx.bfloat16:
+        if _is_bfloat16(v):
             return np.asarray(v.astype(mx.float32))
         return np.asarray(v)
 
